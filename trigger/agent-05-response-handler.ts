@@ -26,10 +26,15 @@ const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_A
 
 const CALENDLY = process.env.CALENDLY_LINK ?? "https://calendly.com/vantera/demo";
 
+import { join } from "path";
+
 function loadSkills(...names: string[]): string {
   return names.map(n => {
-    try   { return readFileSync(`/mnt/skills/user/${n}/SKILL.md`, "utf8"); }
-    catch { return `# ${n}\n[Skill missing]`; }
+    try {
+      return readFileSync(join(process.cwd(), "skills", `${n}.md`), "utf8");
+    } catch {
+      return `# ${n}\n[Skill file not found — add to /skills/${n}.md in your repo]`;
+    }
   }).join("\n\n---\n\n");
 }
 
