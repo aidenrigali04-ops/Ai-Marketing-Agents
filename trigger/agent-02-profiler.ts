@@ -112,7 +112,7 @@ export const leadProfilerAgent = task({
     // Call Claude
     logger.info("Calling Claude for psychological profile");
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5-20250929",
       max_tokens: 1400,
       system:     systemPrompt,
       messages:   [{ role: "user", content: userMessage }],
