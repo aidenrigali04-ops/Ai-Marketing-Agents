@@ -22,17 +22,16 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── SKILL LOADER ─────────────────────────────────────────────
 
+import { join } from "path";
+
 function loadSkills(...names: string[]): string {
-  return names
-    .map((n) => {
-      try {
-        return readFileSync(`/mnt/skills/user/${n}/SKILL.md`, "utf8");
-      } catch {
-        logger.warn(`Skill not found: ${n}`);
-        return `# ${n}\n[Skill missing — add to /mnt/skills/user/${n}/SKILL.md]`;
-      }
-    })
-    .join("\n\n---\n\n");
+  return names.map(n => {
+    try {
+      return readFileSync(join(process.cwd(), "skills", `${n}.md`), "utf8");
+    } catch {
+      return `# ${n}\n[Skill file not found — add to /skills/${n}.md in your repo]`;
+    }
+  }).join("\n\n---\n\n");
 }
 
 // ─── PROFILE SYSTEM PROMPT ────────────────────────────────────
