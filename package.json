@@ -1,0 +1,18 @@
+{
+  "name": "ai-marketing-agents",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "trigger dev",
+    "deploy": "trigger deploy"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "@trigger.dev/sdk": "^3.0.0",
+    "twilio": "^5.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
