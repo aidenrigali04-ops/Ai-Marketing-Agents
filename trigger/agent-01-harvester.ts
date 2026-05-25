@@ -46,19 +46,23 @@ async function searchApollo(vertical: typeof VERTICALS[0], city: string): Promis
   logger.info(`Apollo: ${vertical.industry} in ${city}`);
 
   const res = await fetch("https://api.apollo.io/v1/mixed_people/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
-    body: JSON.stringify({
-      api_key: process.env.APOLLO_API_KEY,
-      q_organization_keyword_tags: vertical.keywords,
-      person_titles: OWNER_TITLES,
-      person_locations: [city],
-      organization_num_employees_ranges: ["1,10", "11,50", "51,200"],
-      contact_email_status: ["verified", "guessed"],
-      per_page: 25,
-      page: 1,
-    }),
-  });
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-cache",
+    "X-Api-Key": process.env.APOLLO_API_KEY!,   // ← add this line
+  },
+  body: JSON.stringify({
+    // api_key line deleted
+    q_organization_keyword_tags: vertical.keywords,
+    person_titles: OWNER_TITLES,
+    person_locations: [city],
+    organization_num_employees_ranges: ["1,10", "11,50", "51,200"],
+    contact_email_status: ["verified", "guessed"],
+    per_page: 25,
+    page: 1,
+  }),
+});
 
   if (!res.ok) {
     logger.warn(`Apollo failed: ${res.status}`, { body: await res.text() });
