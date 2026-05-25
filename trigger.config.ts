@@ -7,7 +7,7 @@
 import { defineConfig } from "@trigger.dev/sdk/v3";
 
 export default defineConfig({
-  project: "proj_YOUR_PROJECT_ID_HERE",   // ← replace after creating project at cloud.trigger.dev
+  project: "proj_cotpwytcllemudkieuyu",  
 
   runtime: "node",
   logLevel: "log",
