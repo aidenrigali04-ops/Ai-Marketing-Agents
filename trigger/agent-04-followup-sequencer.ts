@@ -12,10 +12,9 @@
  */
 
 import { schedules, logger } from "@trigger.dev/sdk/v3";
-import { createClient }      from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase-client";
 import twilio                from "twilio";
 
-const supabase     = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // ─── SEND VIA INSTANTLY ───────────────────────────────────────
