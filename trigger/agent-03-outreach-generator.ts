@@ -18,12 +18,11 @@
 
 import { task, logger } from "@trigger.dev/sdk/v3";
 import Anthropic         from "@anthropic-ai/sdk";
-import { createClient }  from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase-client";
 import twilio            from "twilio";
 import { readFileSync }  from "fs";
 
 const anthropic   = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const supabase    = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 function loadSkills(...names: string[]): string {
