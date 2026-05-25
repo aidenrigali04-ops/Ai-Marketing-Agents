@@ -96,7 +96,7 @@ Rules:
 `.trim();
 
   const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-5-20250929",
     max_tokens: 2400,
     system:     skills,
     messages:   [{ role: "user", content: prompt }],
