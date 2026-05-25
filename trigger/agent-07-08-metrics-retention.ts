@@ -122,7 +122,7 @@ Demo→Close:   ${demoToCloseRate}%
     // Generate narrative with Claude
     const skills = loadSkills("vantera-brand-voice");
     const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5-20250929",
       max_tokens: 600,
       system:     skills,
       messages: [{
