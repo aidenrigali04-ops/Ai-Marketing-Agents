@@ -19,7 +19,6 @@ import { readFileSync } from "fs";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-);
 
 // ─── SKILL LOADER ─────────────────────────────────────────────
 
