@@ -13,11 +13,7 @@
  */
 
 import { schedules, tasks, logger } from "@trigger.dev/sdk/v3";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+import { supabase } from "../lib/supabase-client";
 );
 
 // ─── TARGETS ─────────────────────────────────────────────────
