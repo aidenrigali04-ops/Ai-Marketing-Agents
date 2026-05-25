@@ -14,7 +14,6 @@
 
 import { schedules, tasks, logger } from "@trigger.dev/sdk/v3";
 import { supabase } from "../lib/supabase-client";
-);
 
 // ─── TARGETS ─────────────────────────────────────────────────
 // Rotated on each run so we cover all verticals + cities
