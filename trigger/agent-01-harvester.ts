@@ -1,12 +1,12 @@
-
 /**
- * Agent 01 — Prospect Harvester (Google Places version)
- * Runs every 30 minutes. Uses Google Places API (New) to find
- * service businesses by type + city. Free tier covers ~28,000
- * searches/month — more than enough for this use case.
+ * Agent 01 — Prospect Harvester
+ * Uses Outscraper (Google Maps) for discovery.
+ * Returns phone, website, business name, rating.
+ * Hunter.io enriches the email from company domain.
  *
  * Env vars:
- *   GOOGLE_PLACES_API_KEY      — console.cloud.google.com → Places API (New)
+ *   OUTSCRAPER_API_KEY   — app.outscraper.com → API Keys
+ *   HUNTER_API_KEY       — hunter.io → API
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
  */
 
@@ -16,131 +16,132 @@ import { supabase } from "../lib/supabase-client";
 // ─── TARGETS ─────────────────────────────────────────────────
 
 const VERTICALS = [
-  {
-    industry: "hvac",
-    queries: ["HVAC company", "air conditioning repair", "heating and cooling company"],
-  },
-  {
-    industry: "landscaping",
-    queries: ["landscaping company", "lawn care service", "lawn maintenance"],
-  },
-  {
-    industry: "construction",
-    queries: ["general contractor", "home remodeling contractor", "construction company"],
-  },
-  {
-    industry: "property_mgmt",
-    queries: ["property management company", "property manager"],
-  },
-  {
-    industry: "plumbing",
-    queries: ["plumbing company", "plumber service"],
-  },
+  { industry: "hvac",          queries: ["HVAC company", "air conditioning repair", "heating cooling"] },
+  { industry: "landscaping",   queries: ["landscaping company", "lawn care service"] },
+  { industry: "construction",  queries: ["general contractor", "home remodeling"] },
+  { industry: "property_mgmt", queries: ["property management company"] },
+  { industry: "plumbing",      queries: ["plumbing company", "plumber"] },
 ];
 
 const TARGET_CITIES = [
-  "Phoenix AZ",    "Dallas TX",    "Atlanta GA",
-  "Denver CO",     "Nashville TN", "Tampa FL",
-  "Charlotte NC",  "Austin TX",    "Raleigh NC",
+  "Phoenix AZ", "Dallas TX", "Atlanta GA",
+  "Denver CO",  "Nashville TN", "Tampa FL",
+  "Charlotte NC", "Austin TX", "Raleigh NC",
 ];
 
 // ─── SCORING ─────────────────────────────────────────────────
 
 function scoreLead(place: any): number {
   let score = 0;
-  if (place.nationalPhoneNumber)              score += 20; // phone = reachable
-  if (place.websiteUri)                        score += 20; // has website
-  if ((place.userRatingCount ?? 0) >= 10)      score += 15; // established business
-  if ((place.userRatingCount ?? 0) >= 50)      score += 10; // well-established
-  if ((place.rating ?? 0) >= 4.0)             score += 10; // good reputation
-  if ((place.rating ?? 0) < 4.5)              score += 5;  // room for improvement (pain signal)
-  score += 20; // base score for being a real business
+  if (place.phone)                              score += 20; // reachable via SMS
+  if (place.site)                               score += 15; // has website (for email enrichment)
+  if (place.email)                              score += 25; // direct email found
+  if ((place.reviews ?? 0) >= 10)              score += 10; // established
+  if ((place.reviews ?? 0) >= 50)              score += 5;  // well-established
+  if ((place.rating ?? 0) >= 4.0)              score += 5;  // decent reputation
+  score += 20; // base score
   return Math.min(score, 100);
 }
 
-// ─── GOOGLE PLACES SEARCH ────────────────────────────────────
-// Uses the new Places API (v1) Text Search endpoint
-// Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
+// ─── OUTSCRAPER SEARCH ───────────────────────────────────────
+// Google Maps scraper — returns phone, website, email if listed
+// Docs: https://app.outscraper.com/api-docs
 
-async function searchPlaces(query: string, city: string): Promise<any[]> {
-  logger.info(`Places search: "${query}" in ${city}`);
+async function searchOutscraper(query: string, city: string): Promise<any[]> {
+  logger.info(`Outscraper: "${query}" in ${city}`);
 
-  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-    method: "POST",
+  const searchQuery = encodeURIComponent(`${query} ${city}`);
+  const url = `https://api.app.outscraper.com/maps/search?query=${searchQuery}&limit=20&language=en&region=US&async=false`;
+
+  const res = await fetch(url, {
     headers: {
-      "Content-Type":    "application/json",
-      "X-Goog-Api-Key":  process.env.GOOGLE_PLACES_API_KEY!,
-      "X-Goog-FieldMask": [
-        "places.id",
-        "places.displayName",
-        "places.formattedAddress",
-        "places.nationalPhoneNumber",
-        "places.websiteUri",
-        "places.rating",
-        "places.userRatingCount",
-        "places.businessStatus",
-      ].join(","),
+      "X-API-KEY": process.env.OUTSCRAPER_API_KEY!,
     },
-    body: JSON.stringify({
-      textQuery:       `${query} in ${city}`,
-      maxResultCount:  20,
-      languageCode:    "en",
-      regionCode:      "US",
-    }),
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    logger.warn(`Places API failed: ${res.status}`, { err });
+    logger.warn(`Outscraper failed: ${res.status} ${await res.text()}`);
     return [];
   }
 
   const data = await res.json();
-  const places = (data.places ?? []).filter(
-    (p: any) => p.businessStatus === "OPERATIONAL" || !p.businessStatus
-  );
-
-  logger.info(`Places returned ${places.length} results`);
-  return places;
+  // Outscraper returns { data: [[...results]] } for sync calls
+  const results = data?.data?.[0] ?? data?.data ?? [];
+  logger.info(`Outscraper returned ${results.length} results`);
+  return results;
 }
 
-// ─── MAP PLACE → LEAD ─────────────────────────────────────────
+// ─── HUNTER EMAIL ENRICHMENT ─────────────────────────────────
+// Finds email addresses from a company domain
+// Docs: https://hunter.io/api-documentation
 
-function mapPlaceToLead(place: any, industry: string, query: string) {
-  // Extract city/state from formatted address
-  const addressParts = (place.formattedAddress ?? "").split(",");
-  const city = addressParts.slice(-3, -1).join(",").trim();
+async function findEmailFromDomain(website: string): Promise<string | null> {
+  if (!website || !process.env.HUNTER_API_KEY) return null;
 
+  // Extract clean domain
+  const domain = website
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0]
+    .split("?")[0];
+
+  if (!domain || domain.length < 4) return null;
+
+  try {
+    const res = await fetch(
+      `https://api.hunter.io/v2/domain-search?domain=${domain}&limit=5&api_key=${process.env.HUNTER_API_KEY}`
+    );
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const emails: any[] = data?.data?.emails ?? [];
+
+    if (emails.length === 0) return null;
+
+    // Prefer high-confidence emails, then any email
+    const best = emails
+      .filter((e: any) => e.type === "personal" || e.confidence >= 70)
+      .sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+
+    return best?.value ?? emails[0]?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── MAP RESULT → LEAD ───────────────────────────────────────
+
+function mapToLead(place: any, industry: string) {
   return {
-    name:         null,              // Google Places doesn't give owner name
-    title:        "Owner",           // assume owner for now — Agent 02 will profile
-    company:      place.displayName?.text ?? "",
+    name:         place.owner ?? place.full_name ?? null,
+    title:        "Owner",
+    company:      place.name ?? place.title ?? "",
     industry,
     company_size: null,
-    email:        null,              // not available from Places API
-    phone:        place.nationalPhoneNumber ?? null,
+    email:        place.email ?? place.email_1 ?? null,
+    phone:        place.phone ?? place.phone_1 ?? null,
     linkedin_url: null,
-    website:      place.websiteUri ?? null,
+    website:      place.site ?? place.website ?? null,
     pain_signals: [
-      place.userRatingCount ? `${place.userRatingCount} reviews, ${place.rating ?? "no"} rating` : "",
-      query,
+      place.reviews ? `${place.reviews} Google reviews` : "",
+      place.rating  ? `${place.rating} star rating` : "",
+      place.category ?? "",
     ].filter(Boolean).join(". "),
-    source: "google_places" as const,
+    source: "outscraper" as const,
   };
 }
 
 // ─── DEDUP ───────────────────────────────────────────────────
 
-async function isDuplicate(company: string, phone: string | null): Promise<boolean> {
-  // Check by company name first
-  if (company) {
+async function isDuplicate(company: string, phone: string | null, email: string | null): Promise<boolean> {
+  if (email) {
     const { count } = await supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
-      .ilike("company", company);
+      .eq("email", email.toLowerCase().trim());
     if ((count ?? 0) > 0) return true;
   }
-  // Then by phone
   if (phone) {
     const { count } = await supabase
       .from("leads")
@@ -148,14 +149,19 @@ async function isDuplicate(company: string, phone: string | null): Promise<boole
       .eq("phone", phone);
     if ((count ?? 0) > 0) return true;
   }
+  if (company) {
+    const { count } = await supabase
+      .from("leads")
+      .select("id", { count: "exact", head: true })
+      .ilike("company", company);
+    if ((count ?? 0) > 0) return true;
+  }
   return false;
 }
 
 // ─── INSERT + FIRE AGENT 02 ───────────────────────────────────
 
-async function insertAndProfile(
-  lead: ReturnType<typeof mapPlaceToLead> & { score: number }
-) {
+async function insertAndProfile(lead: ReturnType<typeof mapToLead> & { score: number }) {
   const { data, error } = await supabase
     .from("leads")
     .insert({
@@ -168,11 +174,10 @@ async function insertAndProfile(
     .single();
 
   if (error) {
-    if (error.code === "23505") return; // duplicate — safe to skip
+    if (error.code === "23505") return;
     throw error;
   }
 
-  // Fire Agent 02 immediately for this lead
   await tasks.trigger("lead-profiler-agent", {
     lead_id:      data.id,
     name:         lead.name ?? "",
@@ -183,7 +188,7 @@ async function insertAndProfile(
     pain_signals: lead.pain_signals ?? "",
   });
 
-  logger.info(`Inserted + profiler fired: ${lead.company}`);
+  logger.info(`Inserted + profiler fired: ${lead.company} | phone: ${!!lead.phone} | email: ${!!lead.email}`);
 }
 
 // ─── MAIN CRON ────────────────────────────────────────────────
@@ -193,41 +198,56 @@ export const prospectHarvesterAgent = schedules.task({
   cron: "*/30 * * * *",
 
   run: async () => {
-    logger.info("Agent 01: Prospect Harvester starting (Google Places)");
+    logger.info("Agent 01: Prospect Harvester starting (Outscraper + Hunter)");
 
-    // Rotate vertical + city on each run
     const runIndex = Math.floor(Date.now() / (30 * 60 * 1000));
     const vertical = VERTICALS[runIndex % VERTICALS.length];
     const city     = TARGET_CITIES[runIndex % TARGET_CITIES.length];
-
-    // Pick one query from this vertical for this run
-    const query = vertical.queries[runIndex % vertical.queries.length];
+    const query    = vertical.queries[runIndex % vertical.queries.length];
 
     logger.info(`Run: "${query}" in ${city}`);
 
-    const places = await searchPlaces(query, city);
+    const places = await searchOutscraper(query, city);
 
     if (places.length === 0) {
-      logger.info("No results from Places API");
       await supabase.from("harvest_log").insert({
-        source: "google_places", leads_found: 0, leads_qualified: 0,
-        leads_inserted: 0, leads_duped: 0,
-        vertical: vertical.industry, city,
+        source: "outscraper", leads_found: 0, leads_qualified: 0,
+        leads_inserted: 0, leads_duped: 0, vertical: vertical.industry, city,
       });
       return { inserted: 0, duped: 0 };
     }
 
+    // Map results
+    const mapped = places
+      .map(p => mapToLead(p, vertical.industry))
+      .filter(l => l.company); // must have company name
+
+    // Enrich email via Hunter if missing
+    logger.info(`Enriching emails for ${mapped.filter(l => !l.email && l.website).length} leads without email`);
+
+    for (const lead of mapped) {
+      if (!lead.email && lead.website) {
+        const foundEmail = await findEmailFromDomain(lead.website);
+        if (foundEmail) {
+          lead.email = foundEmail;
+          logger.info(`Hunter found email for ${lead.company}: ${foundEmail}`);
+        }
+        // Small delay to respect Hunter rate limits
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
     // Score + filter
-    const scored = places
-      .map(p => ({ ...mapPlaceToLead(p, vertical.industry, query), score: scoreLead(p) }))
-      .filter(l => l.score >= 40 && l.company);
+    const scored = mapped
+      .map(l => ({ ...l, score: scoreLead(l) }))
+      .filter(l => l.score >= 40);
 
     logger.info(`Qualified (≥40): ${scored.length}/${places.length}`);
 
     let inserted = 0, duped = 0;
 
     for (const lead of scored) {
-      if (await isDuplicate(lead.company, lead.phone)) { duped++; continue; }
+      if (await isDuplicate(lead.company, lead.phone, lead.email)) { duped++; continue; }
 
       try {
         await insertAndProfile(lead);
@@ -236,12 +256,11 @@ export const prospectHarvesterAgent = schedules.task({
         logger.error(`Insert failed: ${lead.company}`, { e });
       }
 
-      // Small delay to be polite to the API
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 150));
     }
 
     await supabase.from("harvest_log").insert({
-      source:          "google_places",
+      source:          "outscraper",
       leads_found:     places.length,
       leads_qualified: scored.length,
       leads_inserted:  inserted,
@@ -250,7 +269,7 @@ export const prospectHarvesterAgent = schedules.task({
       city,
     });
 
-    logger.info("Agent 01 done", { inserted, duped, vertical: vertical.industry, city });
+    logger.info("Agent 01 done", { inserted, duped });
     return { inserted, duped };
   },
 });
