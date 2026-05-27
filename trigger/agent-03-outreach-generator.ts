@@ -58,64 +58,98 @@ async function enrichEmail(website: string): Promise<string | null> {
 
 // ─── GENERATE COPY ────────────────────────────────────────────
 
-interface OutreachCopy {
-  emails: Array<{ subject: string; body: string; day: number }>;
-  linkedin: {
-    connection_request: string;
-    dm1: string; dm1_day: number;
-    dm2: string; dm2_day: number;
-  };
-  sms: Array<{ text: string; day: number }>;
-}
-
 async function generateCopy(
-  lead: Record<string, string>,
+  lead:    Record<string, string>,
   profile: Record<string, unknown>,
   product: string,
-  skills: string
+  skills:  string
 ): Promise<OutreachCopy> {
-  const prompt = `
-Lead: ${lead.name || "Owner"}, ${lead.title} at ${lead.company} (${lead.industry})
-Profile: DISC=${profile.disc}, Awareness=${profile.awarenessLevel}
-Fear: ${profile.primaryFear}
-Ego: ${profile.egoIdentity}
-Opening hook: ${profile.openingHook}
-Do NOT: ${profile.doNot}
-Product: ${product}
 
-Write psychologically calibrated outreach. Respond ONLY with valid JSON:
+  const context = `
+Lead: ${lead.name || "Owner"}, ${lead.title} at ${lead.company} (${lead.industry})
+DISC: ${profile.disc} | Awareness: ${profile.awarenessLevel}
+Fear: ${profile.primaryFear} | Ego: ${profile.egoIdentity}
+Hook: ${profile.openingHook} | Do NOT: ${profile.doNot}
+Product: ${product}`;
+
+  // Call 1 — emails only (smaller, faster)
+  const emailRes = await anthropic.messages.create({
+    model:      "claude-sonnet-4-5-20250929",
+    max_tokens: 900,
+    system:     skills,
+    messages: [{
+      role:    "user",
+      content: `${context}
+
+Write 3 cold emails. Respond ONLY with valid JSON:
 {
   "emails": [
-    { "subject": "...", "body": "...(under 120 words, use [First Name] placeholder)", "day": 0 },
-    { "subject": "...", "body": "...(vertical case study with specific number)", "day": 3 },
+    { "subject": "...", "body": "...(under 100 words, [First Name] placeholder)", "day": 0 },
+    { "subject": "...", "body": "...(vertical case study with number)", "day": 3 },
     { "subject": "...", "body": "...(respectful breakup)", "day": 7 }
-  ],
+  ]
+}`,
+    }],
+  });
+
+  // Wait 8 seconds between calls to stay under rate limit
+  await new Promise(r => setTimeout(r, 8000));
+
+  // Call 2 — LinkedIn only
+  const linkedinRes = await anthropic.messages.create({
+    model:      "claude-sonnet-4-5-20250929",
+    max_tokens: 600,
+    system:     skills,
+    messages: [{
+      role:    "user",
+      content: `${context}
+
+Write LinkedIn outreach. Respond ONLY with valid JSON:
+{
   "linkedin": {
     "connection_request": "...(under 300 chars, no pitch)",
     "dm1": "...(under 400 chars, value first)",
     "dm1_day": 2,
     "dm2": "...(under 350 chars, soft CTA)",
     "dm2_day": 5
-  },
-  "sms": [
-    { "text": "...(under 140 chars, curiosity hook, no pitch)", "day": 1 },
-    { "text": "...(under 155 chars, social proof + Reply STOP to opt out)", "day": 5 }
-  ]
-}`;
-
-  const response = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5-20250929",
-    max_tokens: 2400,
-    system:     skills,
-    messages:   [{ role: "user", content: prompt }],
+  }
+}`,
+    }],
   });
 
-  const raw = response.content
-    .filter(b => b.type === "text")
-    .map(b => (b as any).text)
-    .join("");
+  // Wait 8 seconds
+  await new Promise(r => setTimeout(r, 8000));
 
-  return JSON.parse(raw.replace(/```json|```/g, "").trim()) as OutreachCopy;
+  // Call 3 — SMS only
+  const smsRes = await anthropic.messages.create({
+    model:      "claude-sonnet-4-5-20250929",
+    max_tokens: 300,
+    system:     skills,
+    messages: [{
+      role:    "user",
+      content: `${context}
+
+Write 2 SMS messages. Respond ONLY with valid JSON:
+{
+  "sms": [
+    { "text": "...(under 140 chars, curiosity hook)", "day": 1 },
+    { "text": "...(under 155 chars, social proof + Reply STOP to opt out)", "day": 5 }
+  ]
+}`,
+    }],
+  });
+
+  // Parse all three responses
+  const parse = (res: any) => {
+    const raw = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  };
+
+  return {
+    ...parse(emailRes),
+    ...parse(linkedinRes),
+    ...parse(smsRes),
+  };
 }
 
 // ─── INSTANTLY (EMAIL) ────────────────────────────────────────
