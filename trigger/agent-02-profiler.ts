@@ -1,20 +1,19 @@
 /**
  * Agent 02 — Lead Profiler
- * Triggered by Agent 01 immediately after a new lead is inserted.
- * Runs the full 10-framework psychological profile via Claude,
- * stores the result, then fires Agent 03 (Outreach Generator).
+ * Triggered by Agent 01 after a new lead is inserted.
+ * Runs full psychological profile via Claude, stores result,
+ * then fires Agent 03 (Outreach Generator).
  *
- * Env vars required:
+ * Env vars:
  *   ANTHROPIC_API_KEY
- *   SUPABASE_URL
- *   SUPABASE_SERVICE_ROLE_KEY
+ *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
  */
 
 import { task, logger, tasks } from "@trigger.dev/sdk/v3";
-import Anthropic              from "@anthropic-ai/sdk";
-import { supabase }           from "../lib/supabase-client";
-import { readFileSync }       from "fs";
-import { join }               from "path";
+import Anthropic                from "@anthropic-ai/sdk";
+import { supabase }             from "../lib/supabase-client";
+import { readFileSync }         from "fs";
+import { join }                 from "path";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -25,12 +24,12 @@ function loadSkills(...names: string[]): string {
     try {
       return readFileSync(join(process.cwd(), "skills", `${n}.md`), "utf8");
     } catch {
-      return `# ${n}\n[Skill file not found — add to /skills/${n}.md in your repo]`;
+      return `# ${n}\n[Skill missing — add to /skills/${n}.md]`;
     }
   }).join("\n\n---\n\n");
 }
 
-// ─── PROFILE SYSTEM PROMPT ────────────────────────────────────
+// ─── SYSTEM PROMPT ────────────────────────────────────────────
 
 const PROFILE_SYSTEM = `
 You are an elite behavioral psychologist trained in Cialdini, Kahneman, Schwartz,
@@ -56,14 +55,15 @@ Respond ONLY with valid JSON — no markdown, no preamble, no extra text:
   "doNot": "the single biggest mistake to avoid with this person"
 }
 
-Base the profile on their title, industry, company size, pain signals, and Vantera's
+Base the profile on their title, industry, company size, pain signals, and Vantera
 context as a CRM + automation platform for service businesses.
 `;
 
 // ─── MAIN TASK ────────────────────────────────────────────────
 
 export const leadProfilerAgent = task({
-  id: "lead-profiler-agent",
+  id:          "lead-profiler-agent",
+  maxDuration: 120,
 
   queue: {
     name:             "claude-api-queue",
@@ -89,11 +89,9 @@ export const leadProfilerAgent = task({
   }) => {
     logger.info("Agent 02: Lead Profiler starting", { lead_id: payload.lead_id });
 
-    // Load skills
-    const skills = loadSkills("vantera-brand-voice", "vantera-outreach-agent");
+    const skills       = loadSkills("vantera-brand-voice", "vantera-outreach-agent");
     const systemPrompt = PROFILE_SYSTEM + "\n\n---\n\nVantera context:\n" + skills;
 
-    // Build user message
     const userMessage = [
       `Name: ${payload.name || "Unknown"}`,
       `Title: ${payload.title || "Unknown"}`,
@@ -104,21 +102,25 @@ export const leadProfilerAgent = task({
       `Notes: ${payload.notes || "None"}`,
     ].join("\n");
 
-    // Call Claude
-    logger.info("Calling Claude for psychological profile");
-    const response = await anthropic.messages.create({
-      model:      "claude-sonnet-4-5-20250929",
-      max_tokens: 1400,
-      system:     systemPrompt,
-      messages:   [{ role: "user", content: userMessage }],
-    });
+    logger.info("Calling Claude...");
+
+    const response = await anthropic.messages.create(
+      {
+        model:      "claude-sonnet-4-5-20250929",
+        max_tokens: 1400,
+        system:     systemPrompt,
+        messages:   [{ role: "user", content: userMessage }],
+      },
+      {
+        timeout: 30000,
+      }
+    );
 
     const raw = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
+      .filter(b => b.type === "text")
+      .map(b => (b as { type: "text"; text: string }).text)
       .join("");
 
-    // Parse profile JSON
     let profile: {
       disc:           string;
       awarenessLevel: number;
@@ -137,12 +139,10 @@ export const leadProfilerAgent = task({
       throw new Error(`Profile parse failed: ${(e as Error).message}`);
     }
 
-    // Validate required fields
     if (!profile.disc || !profile.primaryFear || !profile.openingHook) {
       throw new Error(`Profile missing required fields: ${JSON.stringify(profile)}`);
     }
 
-    // Store profile in Supabase
     const { error: upsertError } = await supabase
       .from("lead_profiles")
       .upsert({
@@ -160,7 +160,6 @@ export const leadProfilerAgent = task({
 
     if (upsertError) throw upsertError;
 
-    // Update lead status
     const { error: updateError } = await supabase
       .from("leads")
       .update({ status: "profiled" })
@@ -174,7 +173,6 @@ export const leadProfilerAgent = task({
       level:   profile.awarenessLevel,
     });
 
-    // Fire Agent 03 immediately
     await tasks.trigger("outreach-generator-agent", {
       lead_id: payload.lead_id,
       lead: {
