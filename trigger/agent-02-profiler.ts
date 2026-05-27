@@ -4,8 +4,6 @@
  * Runs the full 10-framework psychological profile via Claude,
  * stores the result, then fires Agent 03 (Outreach Generator).
  *
- * Also handles the Supabase webhook trigger (see edge function).
- *
  * Env vars required:
  *   ANTHROPIC_API_KEY
  *   SUPABASE_URL
@@ -13,16 +11,14 @@
  */
 
 import { task, logger, tasks } from "@trigger.dev/sdk/v3";
-import Anthropic from "@anthropic-ai/sdk";
-import { supabase } from "../lib/supabase-client";
-import { readFileSync } from "fs";
+import Anthropic              from "@anthropic-ai/sdk";
+import { supabase }           from "../lib/supabase-client";
+import { readFileSync }       from "fs";
+import { join }               from "path";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-
 // ─── SKILL LOADER ─────────────────────────────────────────────
-
-import { join } from "path";
 
 function loadSkills(...names: string[]): string {
   return names.map(n => {
@@ -64,21 +60,21 @@ Base the profile on their title, industry, company size, pain signals, and Vante
 context as a CRM + automation platform for service businesses.
 `;
 
-// ─── OUTREACH TRIGGER ─────────────────────────────────────────
-// After profiling, immediately fire Agent 03
-import { tasks } from "@trigger.dev/sdk/v3";
-
 // ─── MAIN TASK ────────────────────────────────────────────────
 
 export const leadProfilerAgent = task({
   id: "lead-profiler-agent",
 
-  // Retry up to 3 times with exponential backoff
+  queue: {
+    name:             "claude-api-queue",
+    concurrencyLimit: 2,
+  },
+
   retry: {
-    maxAttempts: 3,
-    factor: 2,
-    minTimeoutInMs: 2_000,
-    maxTimeoutInMs: 30_000,
+    maxAttempts:    5,
+    factor:         2,
+    minTimeoutInMs: 15000,
+    maxTimeoutInMs: 120000,
   },
 
   run: async (payload: {
@@ -111,7 +107,7 @@ export const leadProfilerAgent = task({
     // Call Claude
     logger.info("Calling Claude for psychological profile");
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model:      "claude-sonnet-4-5-20250929",
       max_tokens: 1400,
       system:     systemPrompt,
       messages:   [{ role: "user", content: userMessage }],
@@ -150,21 +146,21 @@ export const leadProfilerAgent = task({
     const { error: upsertError } = await supabase
       .from("lead_profiles")
       .upsert({
-        lead_id:        payload.lead_id,
-        disc:           profile.disc,
+        lead_id:         payload.lead_id,
+        disc:            profile.disc,
         awareness_level: profile.awarenessLevel,
-        top_triggers:   profile.topTriggers,
-        primary_fear:   profile.primaryFear,
-        ego_identity:   profile.egoIdentity,
-        decision_style: profile.decisionStyle,
-        opening_hook:   profile.openingHook,
-        do_not:         profile.doNot,
-        profiled_at:    new Date().toISOString(),
+        top_triggers:    profile.topTriggers,
+        primary_fear:    profile.primaryFear,
+        ego_identity:    profile.egoIdentity,
+        decision_style:  profile.decisionStyle,
+        opening_hook:    profile.openingHook,
+        do_not:          profile.doNot,
+        profiled_at:     new Date().toISOString(),
       });
 
     if (upsertError) throw upsertError;
 
-    // Update lead status → profiled
+    // Update lead status
     const { error: updateError } = await supabase
       .from("leads")
       .update({ status: "profiled" })
@@ -178,7 +174,7 @@ export const leadProfilerAgent = task({
       level:   profile.awarenessLevel,
     });
 
-    // Fire Agent 03 immediately (Outreach Generator)
+    // Fire Agent 03 immediately
     await tasks.trigger("outreach-generator-agent", {
       lead_id: payload.lead_id,
       lead: {
@@ -192,7 +188,7 @@ export const leadProfilerAgent = task({
       product: "Vantera — CRM and automation platform for service businesses",
     });
 
-    logger.info("Agent 03 (Outreach Generator) fired", { lead_id: payload.lead_id });
+    logger.info("Agent 03 fired", { lead_id: payload.lead_id });
 
     return {
       lead_id: payload.lead_id,
@@ -200,26 +196,5 @@ export const leadProfilerAgent = task({
       level:   profile.awarenessLevel,
       fear:    profile.primaryFear,
     };
-  },
-});
-export const leadProfilerAgent = task({
-  id:    "lead-profiler-agent",
-
-  // ── ADD THIS ──────────────────────────────────────────────
-  queue: {
-    name:             "claude-api-queue",
-    concurrencyLimit: 2,
-  },
-  // ──────────────────────────────────────────────────────────
-
-  retry: {
-    maxAttempts:      5,
-    factor:           2,
-    minTimeoutInMs:   15000,  // wait 15s before retry
-    maxTimeoutInMs:   120000,
-  },
-
-  run: async (payload) => {
-    // ... rest of your existing code unchanged
   },
 });
