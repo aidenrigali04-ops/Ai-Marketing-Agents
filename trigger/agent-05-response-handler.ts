@@ -1,39 +1,38 @@
 /**
  * Agent 05 — Response Handler
- * Triggered by the /api/webhooks/reply route when Instantly,
- * Twilio, or Expandi detect a reply.
- * Classifies the reply via Claude, stops the sequence,
- * sends an appropriate response, and routes interested
- * leads to a demo booking confirmation.
+ * Triggered by /api/webhooks/reply when Instantly, Twilio,
+ * or Expandi detect a reply. Classifies via Claude, stops
+ * the sequence, sends a response, and books demos.
  *
  * Env vars:
  *   ANTHROPIC_API_KEY
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
- *   TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER
  *   INSTANTLY_API_KEY
- *   CALENDLY_LINK  (e.g. https://calendly.com/vantera/demo)
- *   TEAM_EMAIL     (e.g. team@vantera.app — shown as sender)
+ *   TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER
+ *   SLACK_WEBHOOK_URL
+ *   CALENDLY_LINK
  */
 
-import { task, logger } from "@trigger.dev/sdk/v3";
-import Anthropic         from "@anthropic-ai/sdk";
-import { supabase } from "../lib/supabase-client";
-import twilio            from "twilio";
-import { readFileSync }  from "fs";
+import { task, logger }  from "@trigger.dev/sdk/v3";
+import Anthropic          from "@anthropic-ai/sdk";
+import { supabase }       from "../lib/supabase-client";
+import twilio             from "twilio";
+import { readFileSync }   from "fs";
+import { join }           from "path";
 
 const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 const CALENDLY = process.env.CALENDLY_LINK ?? "https://calendly.com/vantera/demo";
 
-import { join } from "path";
+// ─── SKILL LOADER ─────────────────────────────────────────────
 
 function loadSkills(...names: string[]): string {
   return names.map(n => {
     try {
       return readFileSync(join(process.cwd(), "skills", `${n}.md`), "utf8");
     } catch {
-      return `# ${n}\n[Skill file not found — add to /skills/${n}.md in your repo]`;
+      return `# ${n}\n[Skill missing — add to /skills/${n}.md]`;
     }
   }).join("\n\n---\n\n");
 }
@@ -46,7 +45,6 @@ interface Classification {
   response_draft: string | null;
   objection_type: string | null;
   urgency:        "high" | "medium" | "low";
-  time_slot_ask?: string;
 }
 
 async function classifyReply(
@@ -55,10 +53,11 @@ async function classifyReply(
   lead:      any,
   skills:    string
 ): Promise<Classification> {
-  const response = await anthropic.messages.create({
-    model: claude-sonnet-4-5-20250929",
-    max_tokens: 800,
-    system: `${skills}
+  const response = await anthropic.messages.create(
+    {
+      model:      "claude-sonnet-4-5-20250929",
+      max_tokens: 600,
+      system: `${skills}
 
 Classify this sales reply and generate an appropriate response.
 Respond ONLY with valid JSON:
@@ -67,24 +66,22 @@ Respond ONLY with valid JSON:
   "next_action": "book_demo | schedule_followup | handle_objection | get_referral | stop",
   "response_draft": "your reply under 80 words, or null if stopping",
   "objection_type": "price | timing | competitor | size | null",
-  "urgency": "high | medium | low",
-  "time_slot_ask": "suggested availability ask if booking demo, or null"
+  "urgency": "high | medium | low"
 }
 
-If type is 'interested': response_draft should confirm enthusiasm + offer 2 specific time slots + Calendly link.
-If type is 'objection': use objection handling scripts from the skill file.
-If type is 'soft_interest': acknowledge + set a specific follow-up time.
-If type is 'wrong_person': thank them + ask for the right person's contact.
-If type is 'unsubscribe': do not generate a response_draft (null).
-
-Always sound like a real person, not a bot.`,
-    messages: [{
-      role:    "user",
-      content: `Lead: ${lead.name}, ${lead.title} at ${lead.company} (${lead.industry})
+If interested: response_draft should confirm + offer 2 time slots + Calendly link placeholder [CALENDLY].
+If objection: use objection handling from the skill file.
+If unsubscribe: response_draft must be null.
+Sound like a real person.`,
+      messages: [{
+        role:    "user",
+        content: `Lead: ${lead.name ?? "Unknown"}, ${lead.title ?? ""} at ${lead.company ?? ""}
 Channel: ${channel}
 Their reply: "${replyText}"`,
-    }],
-  });
+      }],
+    },
+    { timeout: 30000 }
+  );
 
   const raw = response.content
     .filter(b => b.type === "text")
@@ -97,7 +94,6 @@ Their reply: "${replyText}"`,
 // ─── STOP SEQUENCE ────────────────────────────────────────────
 
 async function stopSequence(leadId: string, sequenceId: string | null): Promise<void> {
-  // Cancel all pending steps
   if (sequenceId) {
     await supabase
       .from("sequence_steps")
@@ -106,7 +102,6 @@ async function stopSequence(leadId: string, sequenceId: string | null): Promise<
       .eq("status", "pending");
   }
 
-  // Also cancel by lead_id as backup
   await supabase
     .from("sequence_steps")
     .update({ status: "cancelled", skip_reason: "lead_replied" })
@@ -116,7 +111,7 @@ async function stopSequence(leadId: string, sequenceId: string | null): Promise<
   logger.info("Sequence stopped", { lead_id: leadId });
 }
 
-// ─── SEND RESPONSE (EMAIL) ────────────────────────────────────
+// ─── SEND EMAIL RESPONSE ─────────────────────────────────────
 
 async function sendEmailResponse(lead: any, body: string): Promise<void> {
   if (!lead.email) return;
@@ -125,18 +120,18 @@ async function sendEmailResponse(lead: any, body: string): Promise<void> {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      api_key:  process.env.INSTANTLY_API_KEY,
-      to:       lead.email,
-      body:     body.replace("[First Name]", lead.name?.split(" ")[0] ?? "there"),
+      api_key:         process.env.INSTANTLY_API_KEY,
+      to:              lead.email,
+      body:            body.replace("[First Name]", lead.name?.split(" ")[0] ?? "there"),
       reply_to_thread: true,
     }),
   });
 
   if (!res.ok) logger.warn(`Instantly reply failed: ${res.status}`);
-  else logger.info("Email reply sent", { email: lead.email });
+  else logger.info(`Email reply sent to ${lead.email}`);
 }
 
-// ─── SEND RESPONSE (SMS) ─────────────────────────────────────
+// ─── SEND SMS RESPONSE ────────────────────────────────────────
 
 async function sendSmsResponse(lead: any, body: string): Promise<void> {
   if (!lead.phone) return;
@@ -146,17 +141,44 @@ async function sendSmsResponse(lead: any, body: string): Promise<void> {
       from: process.env.TWILIO_PHONE_NUMBER!,
       to:   lead.phone,
     });
-    logger.info("SMS reply sent", { phone: lead.phone });
+    logger.info(`SMS reply sent to ${lead.phone}`);
   } catch (e: any) {
     logger.warn(`Twilio reply failed: ${e.message}`);
   }
 }
 
+// ─── SLACK ALERT ──────────────────────────────────────────────
+
+async function alertSlack(lead: any, replyText: string, channel: string): Promise<void> {
+  if (!process.env.SLACK_WEBHOOK_URL) return;
+
+  await fetch(process.env.SLACK_WEBHOOK_URL, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: [
+        "🔥 *Interested reply*",
+        `*Lead:* ${lead.name ?? "Unknown"} — ${lead.title ?? ""} @ ${lead.company ?? ""}`,
+        `*Channel:* ${channel}`,
+        `*Message:* "${replyText}"`,
+        `*Calendly sent:* ${CALENDLY}`,
+      ].join("\n"),
+    }),
+  });
+}
+
 // ─── MAIN TASK ────────────────────────────────────────────────
 
 export const responseHandlerAgent = task({
-  id:    "response-handler-agent",
-  retry: { maxAttempts: 2, factor: 2, minTimeoutInMs: 2000 },
+  id:          "response-handler-agent",
+  maxDuration: 120,
+
+  queue: {
+    name:             "claude-api-queue",
+    concurrencyLimit: 2,
+  },
+
+  retry: { maxAttempts: 2, factor: 2, minTimeoutInMs: 5000 },
 
   run: async (payload: {
     lead_id:     string;
@@ -169,10 +191,10 @@ export const responseHandlerAgent = task({
       channel: payload.channel,
     });
 
-    // Pull lead + profile
+    // Pull lead
     const { data: lead } = await supabase
       .from("leads")
-      .select("*, lead_profiles(*)")
+      .select("*")
       .eq("id", payload.lead_id)
       .single();
 
@@ -180,7 +202,7 @@ export const responseHandlerAgent = task({
 
     const skills = loadSkills("vantera-brand-voice", "vantera-outreach-agent");
 
-    // Classify the reply
+    // Classify reply
     const classification = await classifyReply(
       payload.reply_text,
       payload.channel,
@@ -194,13 +216,14 @@ export const responseHandlerAgent = task({
       urgency: classification.urgency,
     });
 
-    // Stop the sequence immediately (for all reply types)
+    // Stop sequence
     await stopSequence(payload.lead_id, payload.sequence_id);
 
     // Update lead status
-    const newStatus = classification.type === "unsubscribe" ? "unsubscribed"
-                    : classification.type === "interested"  ? "demo_booked"
-                    : "replied";
+    const newStatus =
+      classification.type === "unsubscribe"  ? "unsubscribed" :
+      classification.type === "interested"   ? "demo_booked"  :
+      "replied";
 
     await supabase
       .from("leads")
@@ -211,7 +234,7 @@ export const responseHandlerAgent = task({
       })
       .eq("id", payload.lead_id);
 
-    // Log the classified reply
+    // Log reply
     await supabase.from("reply_log").insert({
       lead_id:        payload.lead_id,
       sequence_id:    payload.sequence_id,
@@ -223,40 +246,37 @@ export const responseHandlerAgent = task({
       objection_type: classification.objection_type,
     });
 
-    // Send response if we have one (not for unsubscribes)
+    // Send response
     if (classification.response_draft && classification.type !== "unsubscribe") {
-      // Inject Calendly link if booking a demo
       let responseText = classification.response_draft;
+
       if (classification.next_action === "book_demo") {
-        responseText += `\n\nBook directly: ${CALENDLY}`;
+        responseText = responseText.replace("[CALENDLY]", CALENDLY);
+        if (!responseText.includes(CALENDLY)) {
+          responseText += `\n\nBook a time: ${CALENDLY}`;
+        }
       }
 
-      if (payload.channel === "email")    await sendEmailResponse(lead, responseText);
-      if (payload.channel === "sms")      await sendSmsResponse(lead, responseText);
-      // LinkedIn replies are handled manually (flagged in Slack via Agent 07)
+      if (payload.channel === "email") await sendEmailResponse(lead, responseText);
+      if (payload.channel === "sms")   await sendSmsResponse(lead, responseText);
+      // LinkedIn replies handled manually — flagged in Slack below
     }
 
-    // Alert team for high-urgency interested replies via Slack
-    if (classification.type === "interested" && process.env.SLACK_WEBHOOK_URL) {
-      await fetch(process.env.SLACK_WEBHOOK_URL, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: `🔥 *Interested reply* from *${lead.name}* (${lead.title} @ ${lead.company})\n*Channel:* ${payload.channel}\n*Their message:* "${payload.reply_text}"\n*Response sent.* Calendly link included.\n*Lead:* <https://your-supabase-dashboard/leads/${lead.id}|View lead>`,
-        }),
-      });
+    // Slack alert for interested replies
+    if (classification.type === "interested") {
+      await alertSlack(lead, payload.reply_text, payload.channel);
     }
 
     logger.info("Agent 05 complete", {
-      lead_id:    payload.lead_id,
-      type:       classification.type,
-      responded:  !!classification.response_draft,
+      lead_id:   payload.lead_id,
+      type:      classification.type,
+      responded: !!classification.response_draft,
     });
 
     return {
-      type:       classification.type,
+      type:        classification.type,
       next_action: classification.next_action,
-      responded:  !!classification.response_draft,
+      responded:   !!classification.response_draft,
     };
   },
 });
