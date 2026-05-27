@@ -114,6 +114,21 @@ The decision maker is almost always:
 - No automated nurture for 6–12 month buyer cycles → leads go dark
 - Post-close referral system nonexistent → every deal starts from zero
 
+### Marketing agencies
+- Client reporting is manual — hours wasted building decks every month
+- Clients have no visibility between check-in calls — they email constantly asking for updates
+- Onboarding new clients is inconsistent — every AM does it differently
+- No automated approval or deliverables system — everything is tracked in Slack threads
+- Scope creep is managed over email — no formal change order process
+- Monthly retainer renewals are awkward conversations with no data to back them up
+
+### SaaS founders
+- Building the product but neglecting customer success — churn from poor communication
+- No structured outreach to convert trial users — follow-up is manual and inconsistent
+- Onboarding emails are generic — not personalized to what the user actually did in the product
+- No system to identify at-risk customers before they cancel
+- Sales outreach is manual — founder is doing cold outreach by hand with no automation
+
 ---
 
 ## Tone and voice guidelines
