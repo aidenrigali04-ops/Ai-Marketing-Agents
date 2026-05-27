@@ -56,7 +56,7 @@ async function classifyReply(
   skills:    string
 ): Promise<Classification> {
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-5-20250929",
+    model: claude-sonnet-4-5-20250929",
     max_tokens: 800,
     system: `${skills}
 
