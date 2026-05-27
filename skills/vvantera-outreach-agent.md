@@ -93,6 +93,20 @@ Construction:
 Real Estate:
 > "A lead that doesn't get a response in 5 minutes is 80% less likely to convert. Most brokerages respond in 47 hours."
 
+### Agency + SaaS opening hook formulas
+
+Marketing agency:
+> "Most agency owners spend 6+ hours a month on client reports that clients read for 4 minutes."
+
+Creative agency:
+> "The agencies growing fastest right now aren't doing more work — they're giving clients more visibility."
+
+SaaS founder:
+> "The difference between 3% and 8% monthly churn is usually just how often customers hear from you."
+
+Digital agency:
+> "Your clients aren't leaving because of the work. They're leaving because they can't see the work happening."
+
 ---
 
 ## Subject line formulas
@@ -142,6 +156,14 @@ Each case study must include:
 | "Send me info" | "Happy to. What's most relevant for you — the automation side, the client portal, or the missed call piece?" (prevent ghosting by getting a specific answer first) |
 | "Call me" | Respond immediately with 2 specific time slots + Calendly link as backup |
 | "Not a good time" | "No problem — when would be better? I'll put something in the calendar for then." |
+
+### Agency-specific objections
+
+| Objection | Response |
+|---|---|
+| "We already use HubSpot / Monday / ClickUp" | "Makes sense — most agencies do. The main gap those tools leave is the client-facing side. Your clients still don't have a branded portal to see what's happening." |
+| "Our clients don't want a portal" | "That's what most agencies think until they set one up. The ones who do report 40% fewer 'where are we at?' emails." |
+| "We're too small for this" | "That's actually the best time — it's easier to build the system at 5 clients than at 25." |
 
 ---
 
