@@ -9,20 +9,28 @@
  *   ANTHROPIC_API_KEY
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
  *   INSTANTLY_API_KEY / INSTANTLY_CAMPAIGN_ID / INSTANTLY_FROM_EMAIL
- *   WAALAXY_API_KEY / WAALAXY_CAMPAIGN_ID
+ *   WAALAXY_API_KEY / WAALAXY_CAMPAIGN_D / WAALAXY_CAMPAIGN_I / WAALAXY_CAMPAIGN_S / WAALAXY_CAMPAIGN_C
  *   TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER
- *   HUNTER_API_KEY   (for email enrichment if still missing)
+ *   HUNTER_API_KEY
  */
 
-import { task, logger } from "@trigger.dev/sdk/v3";
-import Anthropic         from "@anthropic-ai/sdk";
-import { supabase }      from "../lib/supabase-client";
-import twilio            from "twilio";
-import { readFileSync }  from "fs";
-import { join }          from "path";
+import { task, logger }  from "@trigger.dev/sdk/v3";
+import Anthropic          from "@anthropic-ai/sdk";
+import { supabase }       from "../lib/supabase-client";
+import twilio             from "twilio";
+import { readFileSync }   from "fs";
+import { join }           from "path";
 
 const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// ─── TYPES ────────────────────────────────────────────────────
+
+interface OutreachCopy {
+  emails:   Array<{ subject: string; body: string; day: number }>;
+  linkedin: { connection_request: string; dm1: string; dm1_day: number; dm2: string; dm2_day: number };
+  sms:      Array<{ text: string; day: number }>;
+}
 
 // ─── SKILL LOADER ─────────────────────────────────────────────
 
@@ -72,7 +80,15 @@ Fear: ${profile.primaryFear} | Ego: ${profile.egoIdentity}
 Hook: ${profile.openingHook} | Do NOT: ${profile.doNot}
 Product: ${product}`;
 
-  // Call 1 — emails only (smaller, faster)
+  const parse = (res: any) => {
+    const raw = res.content
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("");
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  };
+
+  // Call 1 — emails
   const emailRes = await anthropic.messages.create({
     model:      "claude-sonnet-4-5-20250929",
     max_tokens: 900,
@@ -92,10 +108,9 @@ Write 3 cold emails. Respond ONLY with valid JSON:
     }],
   });
 
-  // Wait 8 seconds between calls to stay under rate limit
   await new Promise(r => setTimeout(r, 8000));
 
-  // Call 2 — LinkedIn only
+  // Call 2 — LinkedIn
   const linkedinRes = await anthropic.messages.create({
     model:      "claude-sonnet-4-5-20250929",
     max_tokens: 600,
@@ -117,10 +132,9 @@ Write LinkedIn outreach. Respond ONLY with valid JSON:
     }],
   });
 
-  // Wait 8 seconds
   await new Promise(r => setTimeout(r, 8000));
 
-  // Call 3 — SMS only
+  // Call 3 — SMS
   const smsRes = await anthropic.messages.create({
     model:      "claude-sonnet-4-5-20250929",
     max_tokens: 300,
@@ -139,12 +153,6 @@ Write 2 SMS messages. Respond ONLY with valid JSON:
     }],
   });
 
-  // Parse all three responses
-  const parse = (res: any) => {
-    const raw = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-    return JSON.parse(raw.replace(/```json|```/g, "").trim());
-  };
-
   return {
     ...parse(emailRes),
     ...parse(linkedinRes),
@@ -155,17 +163,14 @@ Write 2 SMS messages. Respond ONLY with valid JSON:
 // ─── INSTANTLY (EMAIL) ────────────────────────────────────────
 
 async function enrollInstantly(lead: Record<string, string>, copy: OutreachCopy): Promise<void> {
-  if (!lead.email) {
-    logger.warn("No email — skipping Instantly");
-    return;
-  }
+  if (!lead.email) { logger.warn("No email — skipping Instantly"); return; }
 
   const res = await fetch("https://api.instantly.ai/api/v1/lead/add", {
-    method: "POST",
+    method:  "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      api_key:     process.env.INSTANTLY_API_KEY,
-      campaign_id: process.env.INSTANTLY_CAMPAIGN_ID,
+      api_key:              process.env.INSTANTLY_API_KEY,
+      campaign_id:          process.env.INSTANTLY_CAMPAIGN_ID,
       skip_if_in_workspace: true,
       leads: [{
         email:        lead.email,
@@ -189,9 +194,7 @@ async function enrollInstantly(lead: Record<string, string>, copy: OutreachCopy)
 }
 
 // ─── WAALAXY (LINKEDIN) ───────────────────────────────────────
-// Docs: https://help.waalaxy.com/en/articles/8442463-waalaxy-api
 
-// Map DISC type to Waalaxy campaign ID
 const WAALAXY_CAMPAIGNS: Record<string, string> = {
   D: process.env.WAALAXY_CAMPAIGN_D!,
   I: process.env.WAALAXY_CAMPAIGN_I!,
@@ -200,21 +203,15 @@ const WAALAXY_CAMPAIGNS: Record<string, string> = {
 };
 
 async function enrollWaalaxy(
-  lead: Record<string, string>,
+  lead:    Record<string, string>,
   profile: Record<string, unknown>
 ): Promise<void> {
-  if (!lead.linkedin_url) {
-    logger.warn("No LinkedIn URL — skipping Waalaxy");
-    return;
-  }
+  if (!lead.linkedin_url) { logger.warn("No LinkedIn URL — skipping Waalaxy"); return; }
 
   const disc       = (profile.disc as string) ?? "I";
   const campaignId = WAALAXY_CAMPAIGNS[disc] ?? WAALAXY_CAMPAIGNS["I"];
 
-  if (!campaignId) {
-    logger.warn(`No Waalaxy campaign ID for DISC type: ${disc}`);
-    return;
-  }
+  if (!campaignId) { logger.warn(`No Waalaxy campaign ID for DISC: ${disc}`); return; }
 
   const res = await fetch("https://api.waalaxy.com/v1/prospects", {
     method:  "POST",
@@ -231,17 +228,14 @@ async function enrollWaalaxy(
     }),
   });
 
-  if (!res.ok) {
-    logger.warn(`Waalaxy enroll failed: ${res.status} ${await res.text()}`);
-  } else {
-    logger.info(`Waalaxy enrolled: ${lead.linkedin_url} → DISC-${disc} campaign`);
-  }
+  if (!res.ok) logger.warn(`Waalaxy failed: ${res.status} ${await res.text()}`);
+  else logger.info(`Waalaxy enrolled: ${lead.linkedin_url} → DISC-${disc}`);
 }
+
 // ─── TWILIO (SMS) ─────────────────────────────────────────────
 
 async function sendSmsDay1(lead: Record<string, string>, text: string): Promise<void> {
   if (!lead.phone) { logger.warn("No phone — skipping SMS"); return; }
-
   try {
     await twilioClient.messages.create({
       body: text.replace("[First Name]", lead.name?.split(" ")[0] ?? "there"),
@@ -250,7 +244,7 @@ async function sendSmsDay1(lead: Record<string, string>, text: string): Promise<
     });
     logger.info(`SMS sent to ${lead.phone}`);
   } catch (e: any) {
-    logger.warn(`Twilio SMS failed: ${e.message}`);
+    logger.warn(`Twilio failed: ${e.message}`);
   }
 }
 
@@ -266,36 +260,35 @@ async function createSequenceSteps(
   const dayMs = 86400000;
   const steps = [];
 
-  // Email follow-ups (day 0 sent by Instantly on enroll)
   for (const email of copy.emails.filter(e => e.day > 0)) {
     steps.push({
       sequence_id: sequenceId, lead_id: leadId,
-      step_number: email.day === 3 ? 2 : 3, channel: "email",
-      subject: email.subject, content: email.body,
-      send_at: new Date(now.getTime() + email.day * dayMs).toISOString(),
-      status: "pending",
+      step_number: email.day === 3 ? 2 : 3,
+      channel:     "email",
+      subject:     email.subject,
+      content:     email.body,
+      send_at:     new Date(now.getTime() + email.day * dayMs).toISOString(),
+      status:      "pending",
     });
   }
 
-  // LinkedIn DM 2
   if (lead.linkedin_url) {
     steps.push({
       sequence_id: sequenceId, lead_id: leadId,
       step_number: 4, channel: "linkedin",
-      content: copy.linkedin.dm2,
-      send_at: new Date(now.getTime() + copy.linkedin.dm2_day * dayMs).toISOString(),
-      status: "pending",
+      content:     copy.linkedin.dm2,
+      send_at:     new Date(now.getTime() + copy.linkedin.dm2_day * dayMs).toISOString(),
+      status:      "pending",
     });
   }
 
-  // SMS day 5
   if (lead.phone && copy.sms[1]) {
     steps.push({
       sequence_id: sequenceId, lead_id: leadId,
       step_number: 5, channel: "sms",
-      content: copy.sms[1].text,
-      send_at: new Date(now.getTime() + copy.sms[1].day * dayMs).toISOString(),
-      status: "pending",
+      content:     copy.sms[1].text,
+      send_at:     new Date(now.getTime() + copy.sms[1].day * dayMs).toISOString(),
+      status:      "pending",
     });
   }
 
@@ -309,8 +302,19 @@ async function createSequenceSteps(
 // ─── MAIN TASK ────────────────────────────────────────────────
 
 export const outreachGeneratorAgent = task({
-  id:    "outreach-generator-agent",
-  retry: { maxAttempts: 2, factor: 2, minTimeoutInMs: 3000 },
+  id: "outreach-generator-agent",
+
+  queue: {
+    name:             "claude-api-queue",
+    concurrencyLimit: 2,
+  },
+
+  retry: {
+    maxAttempts:    2,
+    factor:         2,
+    minTimeoutInMs: 15000,
+    maxTimeoutInMs: 120000,
+  },
 
   run: async (payload: {
     lead_id: string;
@@ -322,7 +326,7 @@ export const outreachGeneratorAgent = task({
 
     const skills = loadSkills("vantera-brand-voice", "vantera-outreach-agent");
 
-    // Pull full lead record from DB
+    // Pull full lead record
     const { data: leadRecord } = await supabase
       .from("leads")
       .select("*")
@@ -331,9 +335,8 @@ export const outreachGeneratorAgent = task({
 
     const lead = { ...payload.lead, ...leadRecord };
 
-    // Last-chance email enrichment if still missing
+    // Last-chance email enrichment
     if (!lead.email && lead.website) {
-      logger.info("Attempting Hunter email enrichment...");
       const foundEmail = await enrichEmail(lead.website);
       if (foundEmail) {
         lead.email = foundEmail;
@@ -342,14 +345,13 @@ export const outreachGeneratorAgent = task({
       }
     }
 
-    // Log what contact channels we have
-    logger.info("Contact channels available", {
+    logger.info("Channels available", {
       email:    !!lead.email,
       phone:    !!lead.phone,
       linkedin: !!lead.linkedin_url,
     });
 
-    // Generate copy
+    // Generate copy (3 separate Claude calls with delays)
     const copy = await generateCopy(lead, payload.profile, payload.product, skills);
 
     // Store sequence
@@ -373,14 +375,13 @@ export const outreachGeneratorAgent = task({
       .update({ status: "outreach_ready", sequence_id: seqData.id })
       .eq("id", payload.lead_id);
 
-    // Deliver across all available channels in parallel
+    // Deliver in parallel
     await Promise.allSettled([
-      lead.email        ? enrollInstantly(lead, copy) : Promise.resolve(),
-      lead.linkedin_url ? enrollWaalaxy(lead, copy)   : Promise.resolve(),
+      lead.email        ? enrollInstantly(lead, copy)          : Promise.resolve(),
+      lead.linkedin_url ? enrollWaalaxy(lead, payload.profile) : Promise.resolve(),
       lead.phone && copy.sms[0] ? sendSmsDay1(lead, copy.sms[0].text) : Promise.resolve(),
     ]);
 
-    // Create follow-up schedule
     await createSequenceSteps(seqData.id, payload.lead_id, copy, lead);
 
     await supabase
@@ -389,32 +390,12 @@ export const outreachGeneratorAgent = task({
       .eq("id", seqData.id);
 
     logger.info("Agent 03 complete", {
-      lead_id:    payload.lead_id,
-      email_sent: !!lead.email,
-      sms_sent:   !!lead.phone,
-      linkedin:   !!lead.linkedin_url,
+      lead_id:  payload.lead_id,
+      email:    !!lead.email,
+      sms:      !!lead.phone,
+      linkedin: !!lead.linkedin_url,
     });
 
     return { sequence_id: seqData.id };
-  },
-});
-export const outreachGeneratorAgent = task({
-  id:    "outreach-generator-agent",
-
-  // ── ADD THIS ──────────────────────────────────────────────
-  queue: {
-    name:             "claude-api-queue",  // same name = shared limit
-    concurrencyLimit: 2,
-  },
-  // ──────────────────────────────────────────────────────────
-
-  retry: {
-    maxAttempts:    2,
-    factor:         2,
-    minTimeoutInMs: 15000,
-  },
-
-  run: async (payload) => {
-    // ... rest of your existing code unchanged
   },
 });
