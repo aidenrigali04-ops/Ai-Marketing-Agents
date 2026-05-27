@@ -35,7 +35,7 @@ function loadSkills(...names: string[]): string {
 
 // ─── VERTICAL ROTATION ───────────────────────────────────────
 
-const VERTICALS = ["hvac", "property_management", "real_estate", "landscaping", "construction"];
+const VERTICALS = ["hvac", "property_management", "real_estate", "landscaping", "construction",  "marketing_agency", "saas_agency];
 
 function getThisWeeksVertical(): string {
   const weekNum = Math.ceil(new Date().getDate() / 7);
