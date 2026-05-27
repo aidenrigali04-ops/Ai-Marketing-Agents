@@ -202,3 +202,24 @@ export const leadProfilerAgent = task({
     };
   },
 });
+export const leadProfilerAgent = task({
+  id:    "lead-profiler-agent",
+
+  // ── ADD THIS ──────────────────────────────────────────────
+  queue: {
+    name:             "claude-api-queue",
+    concurrencyLimit: 2,
+  },
+  // ──────────────────────────────────────────────────────────
+
+  retry: {
+    maxAttempts:      5,
+    factor:           2,
+    minTimeoutInMs:   15000,  // wait 15s before retry
+    maxTimeoutInMs:   120000,
+  },
+
+  run: async (payload) => {
+    // ... rest of your existing code unchanged
+  },
+});
