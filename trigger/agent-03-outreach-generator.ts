@@ -398,3 +398,23 @@ export const outreachGeneratorAgent = task({
     return { sequence_id: seqData.id };
   },
 });
+export const outreachGeneratorAgent = task({
+  id:    "outreach-generator-agent",
+
+  // ── ADD THIS ──────────────────────────────────────────────
+  queue: {
+    name:             "claude-api-queue",  // same name = shared limit
+    concurrencyLimit: 2,
+  },
+  // ──────────────────────────────────────────────────────────
+
+  retry: {
+    maxAttempts:    2,
+    factor:         2,
+    minTimeoutInMs: 15000,
+  },
+
+  run: async (payload) => {
+    // ... rest of your existing code unchanged
+  },
+});
