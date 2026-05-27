@@ -157,14 +157,32 @@ async function enrollInstantly(lead: Record<string, string>, copy: OutreachCopy)
 // ─── WAALAXY (LINKEDIN) ───────────────────────────────────────
 // Docs: https://help.waalaxy.com/en/articles/8442463-waalaxy-api
 
-async function enrollWaalaxy(lead: Record<string, string>, copy: OutreachCopy): Promise<void> {
+// Map DISC type to Waalaxy campaign ID
+const WAALAXY_CAMPAIGNS: Record<string, string> = {
+  D: process.env.WAALAXY_CAMPAIGN_D!,
+  I: process.env.WAALAXY_CAMPAIGN_I!,
+  S: process.env.WAALAXY_CAMPAIGN_S!,
+  C: process.env.WAALAXY_CAMPAIGN_C!,
+};
+
+async function enrollWaalaxy(
+  lead: Record<string, string>,
+  profile: Record<string, unknown>
+): Promise<void> {
   if (!lead.linkedin_url) {
     logger.warn("No LinkedIn URL — skipping Waalaxy");
     return;
   }
 
-  // Step 1: Add prospect to Waalaxy
-  const prospectRes = await fetch("https://api.waalaxy.com/v1/prospects", {
+  const disc       = (profile.disc as string) ?? "I";
+  const campaignId = WAALAXY_CAMPAIGNS[disc] ?? WAALAXY_CAMPAIGNS["I"];
+
+  if (!campaignId) {
+    logger.warn(`No Waalaxy campaign ID for DISC type: ${disc}`);
+    return;
+  }
+
+  const res = await fetch("https://api.waalaxy.com/v1/prospects", {
     method:  "POST",
     headers: {
       "Authorization": `Bearer ${process.env.WAALAXY_API_KEY}`,
@@ -175,38 +193,16 @@ async function enrollWaalaxy(lead: Record<string, string>, copy: OutreachCopy): 
       first_name:   lead.name?.split(" ")[0] ?? "",
       last_name:    lead.name?.split(" ").slice(1).join(" ") ?? "",
       company_name: lead.company,
-      message_1:    copy.linkedin.connection_request,
-      message_2:    copy.linkedin.dm1,
-      message_3:    copy.linkedin.dm2,
+      campaign_id:  campaignId,
     }),
   });
 
-  if (!prospectRes.ok) {
-    logger.warn(`Waalaxy prospect add failed: ${prospectRes.status} ${await prospectRes.text()}`);
-    return;
-  }
-
-  const prospect = await prospectRes.json();
-
-  // Step 2: Add to campaign
-  if (process.env.WAALAXY_CAMPAIGN_ID && prospect.id) {
-    const campaignRes = await fetch(
-      `https://api.waalaxy.com/v1/campaigns/${process.env.WAALAXY_CAMPAIGN_ID}/prospects`,
-      {
-        method:  "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.WAALAXY_API_KEY}`,
-          "Content-Type":  "application/json",
-        },
-        body: JSON.stringify({ prospect_id: prospect.id }),
-      }
-    );
-
-    if (!campaignRes.ok) logger.warn(`Waalaxy campaign add failed: ${campaignRes.status}`);
-    else logger.info(`Waalaxy enrolled: ${lead.linkedin_url}`);
+  if (!res.ok) {
+    logger.warn(`Waalaxy enroll failed: ${res.status} ${await res.text()}`);
+  } else {
+    logger.info(`Waalaxy enrolled: ${lead.linkedin_url} → DISC-${disc} campaign`);
   }
 }
-
 // ─── TWILIO (SMS) ─────────────────────────────────────────────
 
 async function sendSmsDay1(lead: Record<string, string>, text: string): Promise<void> {
