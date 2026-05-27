@@ -1,15 +1,14 @@
 /**
  * Agent 03 — Outreach Generator
- * Generates calibrated copy via Claude, then:
- *   - Email → Instantly.ai
- *   - LinkedIn → Waalaxy
- *   - SMS → Twilio
+ * Generates calibrated copy via Claude (3 separate calls),
+ * then delivers via Instantly (email), Waalaxy (LinkedIn),
+ * and Twilio (SMS).
  *
  * Env vars:
  *   ANTHROPIC_API_KEY
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
- *   INSTANTLY_API_KEY / INSTANTLY_CAMPAIGN_ID / INSTANTLY_FROM_EMAIL
- *   WAALAXY_API_KEY / WAALAXY_CAMPAIGN_D / WAALAXY_CAMPAIGN_I / WAALAXY_CAMPAIGN_S / WAALAXY_CAMPAIGN_C
+ *   INSTANTLY_API_KEY / INSTANTLY_CAMPAIGN_ID
+ *   WAALAXY_API_KEY / WAALAXY_CAMPAIGN_D / _I / _S / _C
  *   TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER
  *   HUNTER_API_KEY
  */
@@ -28,8 +27,14 @@ const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_A
 
 interface OutreachCopy {
   emails:   Array<{ subject: string; body: string; day: number }>;
-  linkedin: { connection_request: string; dm1: string; dm1_day: number; dm2: string; dm2_day: number };
-  sms:      Array<{ text: string; day: number }>;
+  linkedin: {
+    connection_request: string;
+    dm1:     string;
+    dm1_day: number;
+    dm2:     string;
+    dm2_day: number;
+  };
+  sms: Array<{ text: string; day: number }>;
 }
 
 // ─── SKILL LOADER ─────────────────────────────────────────────
@@ -48,7 +53,10 @@ function loadSkills(...names: string[]): string {
 
 async function enrichEmail(website: string): Promise<string | null> {
   if (!website || !process.env.HUNTER_API_KEY) return null;
-  const domain = website.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  const domain = website
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0];
   if (!domain || domain.length < 4) return null;
   try {
     const res = await fetch(
@@ -57,14 +65,14 @@ async function enrichEmail(website: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = await res.json();
     const emails = data?.data?.emails ?? [];
-    const best = emails.sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+    const best   = emails.sort((a: any, b: any) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
     return best?.value ?? null;
   } catch {
     return null;
   }
 }
 
-// ─── GENERATE COPY ────────────────────────────────────────────
+// ─── GENERATE COPY (3 separate Claude calls) ──────────────────
 
 async function generateCopy(
   lead:    Record<string, string>,
@@ -80,7 +88,7 @@ Fear: ${profile.primaryFear} | Ego: ${profile.egoIdentity}
 Hook: ${profile.openingHook} | Do NOT: ${profile.doNot}
 Product: ${product}`;
 
-  const parse = (res: any) => {
+  const parse = (res: any): any => {
     const raw = res.content
       .filter((b: any) => b.type === "text")
       .map((b: any) => b.text)
@@ -89,35 +97,41 @@ Product: ${product}`;
   };
 
   // Call 1 — emails
-  const emailRes = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5-20250929",
-    max_tokens: 900,
-    system:     skills,
-    messages: [{
-      role:    "user",
-      content: `${context}
+  logger.info("Claude call 1: emails");
+  const emailRes = await anthropic.messages.create(
+    {
+      model:      "claude-sonnet-4-5-20250929",
+      max_tokens: 900,
+      system:     skills,
+      messages: [{
+        role:    "user",
+        content: `${context}
 
 Write 3 cold emails. Respond ONLY with valid JSON:
 {
   "emails": [
     { "subject": "...", "body": "...(under 100 words, [First Name] placeholder)", "day": 0 },
-    { "subject": "...", "body": "...(vertical case study with number)", "day": 3 },
+    { "subject": "...", "body": "...(vertical case study with a number)", "day": 3 },
     { "subject": "...", "body": "...(respectful breakup)", "day": 7 }
   ]
 }`,
-    }],
-  });
+      }],
+    },
+    { timeout: 30000 }
+  );
 
   await new Promise(r => setTimeout(r, 8000));
 
   // Call 2 — LinkedIn
-  const linkedinRes = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5-20250929",
-    max_tokens: 600,
-    system:     skills,
-    messages: [{
-      role:    "user",
-      content: `${context}
+  logger.info("Claude call 2: LinkedIn");
+  const linkedinRes = await anthropic.messages.create(
+    {
+      model:      "claude-sonnet-4-5-20250929",
+      max_tokens: 600,
+      system:     skills,
+      messages: [{
+        role:    "user",
+        content: `${context}
 
 Write LinkedIn outreach. Respond ONLY with valid JSON:
 {
@@ -129,19 +143,23 @@ Write LinkedIn outreach. Respond ONLY with valid JSON:
     "dm2_day": 5
   }
 }`,
-    }],
-  });
+      }],
+    },
+    { timeout: 30000 }
+  );
 
   await new Promise(r => setTimeout(r, 8000));
 
   // Call 3 — SMS
-  const smsRes = await anthropic.messages.create({
-    model:      "claude-sonnet-4-5-20250929",
-    max_tokens: 300,
-    system:     skills,
-    messages: [{
-      role:    "user",
-      content: `${context}
+  logger.info("Claude call 3: SMS");
+  const smsRes = await anthropic.messages.create(
+    {
+      model:      "claude-sonnet-4-5-20250929",
+      max_tokens: 300,
+      system:     skills,
+      messages: [{
+        role:    "user",
+        content: `${context}
 
 Write 2 SMS messages. Respond ONLY with valid JSON:
 {
@@ -150,8 +168,10 @@ Write 2 SMS messages. Respond ONLY with valid JSON:
     { "text": "...(under 155 chars, social proof + Reply STOP to opt out)", "day": 5 }
   ]
 }`,
-    }],
-  });
+      }],
+    },
+    { timeout: 30000 }
+  );
 
   return {
     ...parse(emailRes),
@@ -258,7 +278,7 @@ async function createSequenceSteps(
 ): Promise<void> {
   const now   = new Date();
   const dayMs = 86400000;
-  const steps = [];
+  const steps: any[] = [];
 
   for (const email of copy.emails.filter(e => e.day > 0)) {
     steps.push({
@@ -302,7 +322,8 @@ async function createSequenceSteps(
 // ─── MAIN TASK ────────────────────────────────────────────────
 
 export const outreachGeneratorAgent = task({
-  id: "outreach-generator-agent",
+  id:          "outreach-generator-agent",
+  maxDuration: 300,
 
   queue: {
     name:             "claude-api-queue",
@@ -333,7 +354,7 @@ export const outreachGeneratorAgent = task({
       .eq("id", payload.lead_id)
       .single();
 
-    const lead = { ...payload.lead, ...leadRecord };
+    const lead: Record<string, string> = { ...payload.lead, ...(leadRecord as any) };
 
     // Last-chance email enrichment
     if (!lead.email && lead.website) {
@@ -351,7 +372,7 @@ export const outreachGeneratorAgent = task({
       linkedin: !!lead.linkedin_url,
     });
 
-    // Generate copy (3 separate Claude calls with delays)
+    // Generate copy
     const copy = await generateCopy(lead, payload.profile, payload.product, skills);
 
     // Store sequence
