@@ -21,12 +21,18 @@ const VERTICALS = [
   { industry: "construction",  queries: ["general contractor", "home remodeling"] },
   { industry: "property_mgmt", queries: ["property management company"] },
   { industry: "plumbing",      queries: ["plumbing company", "plumber"] },
+  { industry: "marketing_agency", queries: ["marketing agency", "digital marketing agency", "SEO agency", "social media agency"] },
+  { industry: "creative_agency",  queries: ["creative agency", "branding agency", "advertising agency"] },
+  { industry: "saas_agency",      queries: ["software company", "tech startup", "SaaS company"] },
 ];
+
+
 
 const TARGET_CITIES = [
   "Phoenix AZ", "Dallas TX", "Atlanta GA",
   "Denver CO",  "Nashville TN", "Tampa FL",
   "Charlotte NC", "Austin TX", "Raleigh NC",
+  "San Francisco CA", "Seattle WA"
 ];
 
 // ─── SCORING ─────────────────────────────────────────────────
